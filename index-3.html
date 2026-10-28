@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>สแกนข้อสอบ → JavaScript</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+body{font-family:system-ui,"Noto Sans Thai",sans-serif;background:#f6f8f6;margin:0;padding:12px;color:#222}
+.card{background:#fff;border:1px solid #ddd;border-radius:18px;padding:18px;margin:0 auto 14px;max-width:720px}
+h2{margin:0 0 12px;font-size:20px}
+label{display:block;font-size:13px;color:#666;margin:8px 0 3px}
+input,select,textarea{width:100%;box-sizing:border-box;padding:10px;border:1px solid #ccc;border-radius:10px;font:inherit}
+button{padding:12px 18px;border:1px solid #ccc;border-radius:12px;background:#fff;font:inherit;cursor:pointer}
+button.p{background:#27ae60;color:#fff;border-color:#27ae60;font-weight:700}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.row>*{flex:1}
+.q{border:1px solid #e3e3e3;border-radius:12px;padding:10px;margin:10px 0}
+pre{background:#14221a;color:#eee;border-radius:14px;padding:14px;overflow:auto;font-size:13px;max-height:340px}
+#st{font-size:14px;color:#555;margin-top:8px;white-space:pre-wrap}
+</style>
+</head>
+<body>
+
+<div class="card">
+<h2>1. ตั้งค่า AI ภาครัฐ</h2>
+<label>API URL (แบบ OpenAI-compatible ที่ลงท้าย /chat/completions)</label>
+<input id="url" placeholder="https://.../v1/chat/completions">
+<label>API Key</label>
+<input id="key" type="password" placeholder="ใส่คีย์ที่ได้จากหน่วยงาน">
+<label>ชื่อโมเดล (ต้องรองรับรูปภาพ/Vision)</label>
+<input id="model" placeholder="เช่น ชื่อโมเดลที่หน่วยงานให้มา">
+<div class="row"><button class="p" onclick="testConn()">🔌 ทดสอบการเชื่อมต่อ</button></div>
+<div id="conn" style="margin-top:8px;font-size:14px;white-space:pre-wrap"></div>
+</div>
+
+<div class="card">
+<h2>2. ข้อมูลชุดข้อสอบ</h2>
+<label>ชื่อชุด</label><input id="name" value="ชุดข้อสอบใหม่">
+<div class="row">
+<div><label>ไอคอน</label><input id="icon" value="📗"></div>
+<div><label>สี</label><input id="color" type="color" value="#27ae60"></div>
+</div>
+</div>
+
+<div class="card">
+<h2>3. สแกนข้อสอบ</h2>
+<input id="file" type="file" accept="image/*,application/pdf" multiple>
+<div class="row"><button class="p" onclick="scan()">สแกนด้วย AI</button></div>
+<div id="st"></div>
+<div id="list"></div>
+<p id="empty" style="color:#777">ยังไม่มีข้อสอบ สแกนไฟล์ก่อน หรือกด “เพิ่มข้อ” เพื่อพิมพ์เอง</p>
+<button onclick="add()">เพิ่มข้อ</button>
+</div>
+
+<div class="card">
+<h2>4. ไฟล์ที่ได้</h2>
+<pre id="out"></pre>
+<div class="row">
+<button class="p" onclick="dl()">ดาวน์โหลด new-sets.js</button>
+<button onclick="cp()">คัดลอก</button>
+</div>
+</div>
+
+<script>
+let qs=[];
+const $=id=>document.getElementById(id);
+["url","model"].forEach(k=>{try{$(k).value=localStorage.getItem("ex_"+k)||""}catch(e){}});
+
+const PROMPT=`อ่านภาพข้อสอบนี้ ดึงทุกข้อออกมาเป็น JSON array เท่านั้น (ไม่มีข้อความอื่น ไม่มี markdown)
+รูปแบบ: [{"q":"โจทย์","c":["ตัวเลือก ก","ตัวเลือก ข","ตัวเลือก ค","ตัวเลือก ง","ตัวเลือก จ"],"a":-1}]
+ถ้าข้อสอบมีไม่ถึง 5 ตัวเลือก ให้ส่งเท่าที่มี
+กติกา: ตัวเลือกไม่ต้องใส่ ก. ข. ค. ง. นำหน้า / a คือลำดับเฉลยนับจาก 0 (0=ก 1=ข 2=ค 3=ง 4=จ) ถ้าในภาพไม่มีเฉลยให้ใส่ -1 / คงภาษาและตัวเลขตามต้นฉบับ`;
+
+
+async function call(content){
+  const r=await fetch($("url").value.trim(),{method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":"Bearer "+$("key").value.trim()},
+    body:JSON.stringify({model:$("model").value.trim(),max_tokens:20,temperature:0,messages:[{role:"user",content}]})});
+  const t=await r.text();
+  if(!r.ok)throw new Error("HTTP "+r.status+": "+t.slice(0,150));
+  try{return JSON.parse(t).choices[0].message.content||"(ว่าง)"}catch(e){throw new Error("รูปแบบตอบกลับไม่ใช่ OpenAI-compatible: "+t.slice(0,150))}
+}
+async function testConn(){
+  const o=$("conn");
+  if(!$("url").value||!$("model").value){o.textContent="❌ กรุณาใส่ API URL และชื่อโมเดลก่อน";return}
+  o.style.color="#555";o.textContent="⏳ กำลังทดสอบ...";
+  let msg="";
+  try{
+    const t=await call("ตอบสั้นๆ ว่า OK");
+    msg="✅ เชื่อมต่อสำเร็จ — AI ตอบ: "+t.slice(0,40);
+  }catch(e){
+    o.style.color="#c0392b";
+    o.textContent="❌ เชื่อมต่อไม่ผ่าน\n"+e.message+(e instanceof TypeError?"\n(น่าจะติด CORS/เครือข่าย: ต้องเรียกผ่านเซิร์ฟเวอร์ตัวกลาง หรือให้หน่วยงานเปิด CORS)":"");
+    return;
+  }
+  try{
+    const png="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP4z8CAFTEMLQkAcTMf4Zk3JpoAAAAASUVORK5CYII=";
+    await call([{type:"text",text:"ภาพนี้มีสีอะไร ตอบสั้นๆ"},{type:"image_url",image_url:{url:png}}]);
+    msg+="\n✅ โมเดลรองรับรูปภาพ (สแกนข้อสอบได้)";o.style.color="#1e8449";
+  }catch(e){
+    msg+="\n⚠️ ส่งรูปไม่ผ่าน: "+e.message+"\nโมเดลนี้อาจไม่รองรับรูปภาพ ต้องใช้โมเดล Vision/OCR";o.style.color="#b9770e";
+  }
+  o.textContent=msg;
+}
+function setSt(t){$("st").textContent=t}
+const toURL=f=>new Promise(r=>{const x=new FileReader();x.onload=()=>r(x.result);x.readAsDataURL(f)});
+
+async function pages(f){
+  if(f.type!=="application/pdf")return [await toURL(f)];
+  pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  const pdf=await pdfjsLib.getDocument({data:await f.arrayBuffer()}).promise,out=[];
+  for(let i=1;i<=pdf.numPages;i++){
+    const p=await pdf.getPage(i),v=p.getViewport({scale:1.6}),c=document.createElement("canvas");
+    c.width=v.width;c.height=v.height;
+    await p.render({canvasContext:c.getContext("2d"),viewport:v}).promise;
+    out.push(c.toDataURL("image/jpeg",.85));
+  }
+  return out;
+}
+
+async function scan(){
+  const files=[...$("file").files];
+  if(!files.length)return setSt("กรุณาเลือกไฟล์ก่อน");
+  if(!$("url").value||!$("model").value)return setSt("กรุณาใส่ API URL และชื่อโมเดล");
+  try{localStorage.setItem("ex_url",$("url").value);localStorage.setItem("ex_model",$("model").value)}catch(e){}
+  let n=0,total=0;
+  try{
+    const imgs=[];
+    for(const f of files){setSt("กำลังอ่านไฟล์ "+f.name+"...");imgs.push(...await pages(f))}
+    for(const img of imgs){
+      n++;setSt(`กำลังสแกนหน้า ${n}/${imgs.length}...`);
+      const r=await fetch($("url").value,{method:"POST",
+        headers:{"Content-Type":"application/json","Authorization":"Bearer "+$("key").value},
+        body:JSON.stringify({model:$("model").value,temperature:0,
+          messages:[{role:"user",content:[{type:"text",text:PROMPT},{type:"image_url",image_url:{url:img}}]}]})});
+      if(!r.ok)throw new Error("API ตอบกลับ "+r.status+" "+(await r.text()).slice(0,200));
+      const j=await r.json(),txt=j.choices?.[0]?.message?.content||"";
+      const m=txt.match(/\[[\s\S]*\]/);
+      if(!m){setSt("หน้า "+n+": AI ไม่ได้ตอบเป็น JSON ข้ามหน้านี้");continue}
+      const arr=JSON.parse(m[0]);
+      arr.forEach(o=>{qs.push({q:String(o.q||""),c:[0,1,2,3,4].map(i=>String((o.c||[])[i]??"")),a:Number.isInteger(o.a)?o.a:-1});total++});
+      render();
+    }
+    setSt(`เสร็จแล้ว ได้ ${total} ข้อ — ตรวจทานก่อนดาวน์โหลด`);
+  }catch(e){setSt("เกิดข้อผิดพลาด: "+e.message+"\n(ถ้าเป็น CORS ให้เรียกผ่านเซิร์ฟเวอร์ตัวกลางของคุณ)")}
+}
+
+function add(){qs.push({q:"",c:["","","","",""],a:-1});render()}
+function del(i){qs.splice(i,1);render()}
+function render(){
+  $("empty").style.display=qs.length?"none":"block";
+  $("list").innerHTML=qs.map((o,i)=>`<div class="q"><b>ข้อ ${i+1}</b>
+  <textarea rows="2" oninput="qs[${i}].q=this.value;gen()">${esc(o.q)}</textarea>
+  ${o.c.map((c,k)=>`<input style="margin-top:5px" placeholder="${"กขคงจ"[k]}" value="${esc(c)}" oninput="qs[${i}].c[${k}]=this.value;gen()">`).join("")}
+  <div class="row"><select onchange="qs[${i}].a=+this.value;gen()">
+  <option value="-1"${o.a<0?" selected":""}>ยังไม่ได้ระบุเฉลย</option>
+  ${[0,1,2,3,4].map(k=>`<option value="${k}"${o.a===k?" selected":""}>เฉลย ${"กขคงจ"[k]}</option>`).join("")}
+  </select><button onclick="del(${i})">ลบข้อ</button></div></div>`).join("");
+  gen();
+}
+const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/"/g,"&quot;");
+
+function code(){
+  const J=JSON.stringify;
+  const body=qs.map(o=>{
+    const c=[...o.c];while(c.length>2&&!c[c.length-1].trim())c.pop();
+    return `  [${J(o.q)}, ${J(c)}, ${o.a}]`;
+  }).join(",\n");
+  return `// วิธีใช้: เปิด exam-data.js → วางชุดข้อสอบนี้ต่อท้ายรายการชุดข้อสอบ (window.EXTRA)
+// ข้อที่ถูกนับจาก 0: 0=ก 1=ข 2=ค 3=ง 4=จ (-1 = ยังไม่ได้ระบุเฉลย)
+
+// ===== ${$("name").value} =====
+{
+name:${J($("name").value)},
+icon:${J($("icon").value)},
+color:${J($("color").value)},
+q:[
+${body}
+]
+},
+`;
+}
+function gen(){$("out").textContent=code()}
+["name","icon","color"].forEach(k=>$(k).addEventListener("input",gen));
+function dl(){const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([code()],{type:"text/javascript"}));a.download="new-sets.js";a.click()}
+function cp(){navigator.clipboard.writeText(code()).then(()=>setSt("คัดลอกแล้ว"))}
+render();
+</script>
+</body>
+</html>
